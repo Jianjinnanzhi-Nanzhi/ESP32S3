@@ -1,0 +1,50 @@
+#ifndef PHOTO_WEB_SERVER_H
+#define PHOTO_WEB_SERVER_H
+
+#include <Arduino.h>
+
+#include <vector>
+
+#include "LittleFS.h"
+#include "ResourceMutex.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+
+
+struct PhotoEntry
+{
+  String name;
+  uint64_t ts;
+  size_t size;
+};
+
+class PhotoWebServer
+{
+ public:
+  explicit PhotoWebServer(ResourceMutex& mutex);
+  bool begin(uint16_t port = 80);
+
+ private:
+  static esp_err_t indexHandler(httpd_req_t* req);
+  static esp_err_t photoHandler(httpd_req_t* req);
+  static esp_err_t deletePhotoHandler(httpd_req_t* req);
+  static esp_err_t deleteAllHandler(httpd_req_t* req);
+
+  esp_err_t handleIndex(httpd_req_t* req);
+  esp_err_t handlePhoto(httpd_req_t* req);
+  esp_err_t handleDeletePhoto(httpd_req_t* req);
+  esp_err_t handleDeleteAll(httpd_req_t* req);
+
+  static uint64_t parsePhotoTs(const String& name);
+  static String toPath(const String& name);
+  static bool isValidName(const String& name);
+  static void sendBadRequest(httpd_req_t* req, const char* message);
+
+  ResourceMutex& mutex_;
+  httpd_handle_t server_;
+  uint8_t chunkBuf_[1024];
+
+  static PhotoWebServer* instance_;
+};
+
+#endif

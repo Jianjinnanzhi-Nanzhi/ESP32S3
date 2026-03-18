@@ -1,13 +1,19 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
-#include "OV5640_base.h"
-#include "esp_camera.h"
-#include "esp_http_server.h"
-#include "esp_log.h"
-#include "jpg_http_capture.h"
+#include "CameraService.h"
+#include "LittleFS.h"
+#include "PhotoWebServer.h"
+#include "ResourceMutex.h"
+#include "WifiService.h"
 
-static const char *MAIN_TAG = "main";
+const char* ssid = "Redmi";
+const char* password = "88889999";
+
+static ResourceMutex g_resourceMutex;
+static CameraService g_camera(g_resourceMutex);
+static PhotoWebServer g_photoWeb(g_resourceMutex);
+static WifiService g_wifi;
 
 void setup()
 {
@@ -21,20 +27,31 @@ void setup()
     return;
   }
 
-  // 初始化摄像头
-  camera_init();
+  if (!g_resourceMutex.begin())
+  {
+    Serial.println("Resource mutex init failed");
+    return;
+  }
 
-  // 建立 WiFi 热点 (AP)
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP("ESP32S3-CAM", "12345678");
-  Serial.print("AP 启动, IP地址: ");
-  Serial.println(WiFi.softAPIP());
+  // 初始化摄像头
+  if (g_camera.begin() != ESP_OK)
+  {
+    Serial.println("Camera init failed");
+    return;
+  }
+
+  if (!g_wifi.connectStation(ssid, password))
+  {
+    return;
+  }
+
+  g_photoWeb.begin(80);
 }
 
 void loop()
 {
   // 每隔10秒拍一张照片
   Serial.println("拍摄一张新照片...");
-  camera_capture();
+  g_camera.captureAndSave();
   delay(10000);
 }
