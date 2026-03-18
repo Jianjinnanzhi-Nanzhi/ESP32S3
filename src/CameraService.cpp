@@ -1,5 +1,7 @@
 #include "CameraService.h"
 
+#include <string.h>
+
 // 适配当前 ESP32-S3 OV5640 板卡引脚
 #define CAM_PIN_PWDN -1
 #define CAM_PIN_RESET -1
@@ -21,7 +23,7 @@
 
 static const char* CAMERA_TAG = "CameraService";
 
-CameraService::CameraService(ResourceMutex& mutex) : mutex_(mutex)
+CameraService::CameraService()
 {
   config_.pin_pwdn = CAM_PIN_PWDN;
   config_.pin_reset = CAM_PIN_RESET;
@@ -73,11 +75,32 @@ esp_err_t CameraService::begin()
 
 esp_err_t CameraService::captureAndSave()
 {
-  if (!mutex_.lock(2000))
+  uint8_t* buf = NULL;
+  size_t len = 0;
+  uint64_t tsMs = 0;
+
+  esp_err_t cap = captureToJpegBuffer(&buf, &len, &tsMs);
+  if (cap != ESP_OK)
   {
-    ESP_LOGW(CAMERA_TAG, "camera/fs busy, skip one capture");
+    return cap;
+  }
+
+  esp_err_t save = saveJpegBuffer(buf, len, tsMs);
+  free(buf);
+  return save;
+}
+
+esp_err_t CameraService::captureToJpegBuffer(uint8_t** outBuf, size_t* outLen,
+                                             uint64_t* outTsMs)
+{
+  if (outBuf == NULL || outLen == NULL || outTsMs == NULL)
+  {
     return ESP_FAIL;
   }
+
+  *outBuf = NULL;
+  *outLen = 0;
+  *outTsMs = 0;
 
   esp_err_t result = ESP_FAIL;
   for (int attempt = 0; attempt < 3; ++attempt)
@@ -90,33 +113,47 @@ esp_err_t CameraService::captureAndSave()
       continue;
     }
 
-    result = savePhoto(fb);
-    esp_camera_fb_return(fb);
-    if (result == ESP_OK)
+    if (fb->format != PIXFORMAT_JPEG)
     {
+      ESP_LOGE(CAMERA_TAG, "Frame is not JPEG");
+      esp_camera_fb_return(fb);
+      result = ESP_FAIL;
       break;
     }
+
+    uint8_t* copied = (uint8_t*)malloc(fb->len);
+    if (copied == NULL)
+    {
+      ESP_LOGE(CAMERA_TAG, "Malloc failed for frame copy (%u bytes)",
+               (unsigned int)fb->len);
+      esp_camera_fb_return(fb);
+      result = ESP_ERR_NO_MEM;
+      break;
+    }
+
+    memcpy(copied, fb->buf, fb->len);
+    *outBuf = copied;
+    *outLen = fb->len;
+    *outTsMs = (uint64_t)(esp_timer_get_time() / 1000ULL);
+
+    esp_camera_fb_return(fb);
+    result = ESP_OK;
+    break;
   }
 
-  mutex_.unlock();
   return result;
 }
 
-esp_err_t CameraService::savePhoto(camera_fb_t* fb)
+esp_err_t CameraService::saveJpegBuffer(const uint8_t* buf, size_t len,
+                                        uint64_t tsMs)
 {
-  if (fb == NULL)
+  if (buf == NULL || len == 0)
   {
-    return ESP_FAIL;
-  }
-  if (fb->format != PIXFORMAT_JPEG)
-  {
-    ESP_LOGE(CAMERA_TAG, "Frame is not JPEG");
     return ESP_FAIL;
   }
 
   char path[64];
-  uint64_t ts = (uint64_t)(esp_timer_get_time() / 1000ULL);
-  snprintf(path, sizeof(path), "/picture_%llu.jpg", (unsigned long long)ts);
+  snprintf(path, sizeof(path), "/picture_%llu.jpg", (unsigned long long)tsMs);
 
   File file = LittleFS.open(path, FILE_WRITE);
   if (!file)
@@ -125,8 +162,18 @@ esp_err_t CameraService::savePhoto(camera_fb_t* fb)
     return ESP_FAIL;
   }
 
-  file.write(fb->buf, fb->len);
+  file.write(buf, len);
   file.close();
-  ESP_LOGI(CAMERA_TAG, "Saved: %s (%u bytes)", path, (unsigned int)fb->len);
+  ESP_LOGI(CAMERA_TAG, "Saved: %s (%u bytes)", path, (unsigned int)len);
   return ESP_OK;
+}
+
+esp_err_t CameraService::savePhotoFrame(camera_fb_t* fb)
+{
+  if (fb == NULL)
+  {
+    return ESP_FAIL;
+  }
+  return saveJpegBuffer(fb->buf, fb->len,
+                        (uint64_t)(esp_timer_get_time() / 1000ULL));
 }
