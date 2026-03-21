@@ -8,14 +8,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-const char* ssid = "Redmi";
-const char* password = "88889999";
+const char* ssid = "桂花糕";
+const char* password = "asdfghjkl";
 
 static CameraService g_camera;
 static MemoryPhotoStore g_photoStore(6);
 static PhotoWebServer g_photoWeb(g_photoStore);
 static WifiService g_wifi;
-static const uint32_t CAPTURE_INTERVAL_MS = 3000;
+static const uint32_t CAPTURE_INTERVAL_MS = 100;
 static const uint32_t WEB_TASK_STACK = 8192;
 static const uint32_t CAPTURE_TASK_STACK = 163840;
 
@@ -61,6 +61,10 @@ static void captureTask(void* pvParameters)
     {
       Serial.println("CaptureTask: ring buffer busy, drop frame");
       free(buf);
+    }
+    else
+    {
+      g_photoWeb.notifyNewFrame();
     }
 
     vTaskDelay(pdMS_TO_TICKS(CAPTURE_INTERVAL_MS));
