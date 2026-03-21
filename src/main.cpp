@@ -10,26 +10,32 @@
 
 const char* ssid = "桂花糕";
 const char* password = "asdfghjkl";
+static const uint16_t WEB_SERVER_PORT = 80;
+static const IPAddress DEVICE_STATIC_IP(192, 168, 1, 188);
+static const IPAddress DEVICE_GATEWAY(192, 168, 1, 1);
+static const IPAddress DEVICE_SUBNET(255, 255, 255, 0);
+static const IPAddress DEVICE_DNS1(8, 8, 8, 8);
 
 static CameraService g_camera;
 static MemoryPhotoStore g_photoStore(6);
 static PhotoWebServer g_photoWeb(g_photoStore);
 static WifiService g_wifi;
-static const uint32_t CAPTURE_INTERVAL_MS = 100;
+static const uint32_t CAPTURE_INTERVAL_MS = 34;  // ~30 FPS
 static const uint32_t WEB_TASK_STACK = 8192;
 static const uint32_t CAPTURE_TASK_STACK = 163840;
 
 static void webTask(void* pvParameters)
 {
   Serial.println("WebTask: starting...");
-  if (!g_wifi.connectStation(ssid, password))
+  if (!g_wifi.connectStationStatic(ssid, password, DEVICE_STATIC_IP,
+                                   DEVICE_GATEWAY, DEVICE_SUBNET, DEVICE_DNS1))
   {
     Serial.println("WebTask: WiFi connect failed");
     vTaskDelete(NULL);
     return;
   }
 
-  if (!g_photoWeb.begin(80))
+  if (!g_photoWeb.begin(WEB_SERVER_PORT))
   {
     Serial.println("WebTask: web server start failed");
     vTaskDelete(NULL);

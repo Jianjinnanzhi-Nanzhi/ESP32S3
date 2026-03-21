@@ -61,8 +61,8 @@ CameraService::CameraService()
   config_.ledc_channel = LEDC_CHANNEL_0;
 
   config_.pixel_format = PIXFORMAT_JPEG;
-  config_.frame_size = FRAMESIZE_SXGA;
-  config_.jpeg_quality = 10;
+  config_.frame_size = FRAMESIZE_VGA;
+  config_.jpeg_quality = 4;
   config_.fb_count = 2;
   config_.grab_mode = CAMERA_GRAB_LATEST;
 }
