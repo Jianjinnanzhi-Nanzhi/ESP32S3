@@ -62,7 +62,7 @@ CameraService::CameraService()
 
   config_.pixel_format = PIXFORMAT_JPEG;
   config_.frame_size = FRAMESIZE_VGA;
-  config_.jpeg_quality = 4;
+  config_.jpeg_quality = 7;
   config_.fb_count = 2;
   config_.grab_mode = CAMERA_GRAB_LATEST;
 }
@@ -83,6 +83,9 @@ esp_err_t CameraService::begin()
   }
 
   ESP_LOGI(CAMERA_TAG, "Camera init success");
+
+  // 默认使用自动曝光，启动阶段避免首帧过暗/过曝。
+  setAutoExposure(true);
   return ESP_OK;
 }
 
@@ -197,4 +200,82 @@ esp_err_t CameraService::savePhotoFrame(camera_fb_t* fb)
   }
   return saveJpegBuffer(fb->buf, fb->len,
                         (uint64_t)(esp_timer_get_time() / 1000ULL));
+}
+
+esp_err_t CameraService::setAutoExposure(bool enabled)
+{
+  sensor_t* sensor = esp_camera_sensor_get();
+  if (sensor == NULL || sensor->set_exposure_ctrl == NULL)
+  {
+    ESP_LOGE(CAMERA_TAG, "Sensor not ready for auto exposure");
+    return ESP_FAIL;
+  }
+
+  if (sensor->set_exposure_ctrl(sensor, enabled ? 1 : 0) != 0)
+  {
+    ESP_LOGE(CAMERA_TAG, "set_exposure_ctrl(%d) failed", enabled ? 1 : 0);
+    return ESP_FAIL;
+  }
+
+  ESP_LOGI(CAMERA_TAG, "Auto exposure: %s", enabled ? "ON" : "OFF");
+  return ESP_OK;
+}
+
+esp_err_t CameraService::setManualExposure(int value)
+{
+  sensor_t* sensor = esp_camera_sensor_get();
+  if (sensor == NULL || sensor->set_exposure_ctrl == NULL ||
+      sensor->set_aec_value == NULL)
+  {
+    ESP_LOGE(CAMERA_TAG, "Sensor not ready for manual exposure");
+    return ESP_FAIL;
+  }
+
+  const int clamped = clampExposureValue(value);
+
+  if (sensor->set_exposure_ctrl(sensor, 0) != 0)
+  {
+    ESP_LOGE(CAMERA_TAG, "Disable auto exposure failed");
+    return ESP_FAIL;
+  }
+
+  if (sensor->set_aec_value(sensor, clamped) != 0)
+  {
+    ESP_LOGE(CAMERA_TAG, "set_aec_value(%d) failed", clamped);
+    return ESP_FAIL;
+  }
+
+  ESP_LOGI(CAMERA_TAG, "Manual exposure set: %d", clamped);
+  return ESP_OK;
+}
+
+esp_err_t CameraService::getExposureState(bool* outAutoEnabled, int* outValue)
+{
+  if (outAutoEnabled == NULL || outValue == NULL)
+  {
+    return ESP_FAIL;
+  }
+
+  sensor_t* sensor = esp_camera_sensor_get();
+  if (sensor == NULL)
+  {
+    return ESP_FAIL;
+  }
+
+  *outAutoEnabled = sensor->status.aec != 0;
+  *outValue = clampExposureValue((int)sensor->status.aec_value);
+  return ESP_OK;
+}
+
+int CameraService::clampExposureValue(int value) const
+{
+  if (value < kExposureMin)
+  {
+    return kExposureMin;
+  }
+  if (value > kExposureMax)
+  {
+    return kExposureMax;
+  }
+  return value;
 }

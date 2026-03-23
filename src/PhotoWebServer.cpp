@@ -7,8 +7,9 @@ static const char* WEB_TAG = "PhotoWebServer";
 
 PhotoWebServer* PhotoWebServer::instance_ = NULL;
 
-PhotoWebServer::PhotoWebServer(MemoryPhotoStore& store)
-    : store_(store), server_(NULL)
+PhotoWebServer::PhotoWebServer(MemoryPhotoStore& store,
+                               CameraService* cameraService)
+    : store_(store), cameraService_(cameraService), server_(NULL)
 {
 }
 
@@ -74,18 +75,53 @@ esp_err_t PhotoWebServer::handleIndex(httpd_req_t* req)
       "serif;max-width:820px;margin:18px auto;padding:0 "
       "12px;}img{display:block;"
       "width:100%;max-width:760px;border:1px solid #bbb;border-radius:8px;}"
-      "#status{font-size:14px;color:#444;margin:10px 0;}</style></head><body>"
+      "#status{font-size:14px;color:#444;margin:10px 0;}"
+      ".panel{margin:12px 0;padding:10px;border:1px solid #ddd;border-radius:"
+      "8px;background:#fafafa;}"
+      "label{display:inline-flex;align-items:center;gap:6px;}"
+      "input[type=range]{width:220px;vertical-align:middle;}"
+      "#expValue{display:inline-block;min-width:48px;text-align:right;}</style>"
+      "</head><body>"
       "<h1>ESP32S3 WebSocket Stream</h1><div id=\"status\">Connecting...</div>"
+      "<div class=\"panel\"><strong>Exposure</strong><br>"
+      "<label><input type=\"checkbox\" id=\"autoExp\" checked>Auto</label>"
+      "<br><label>Manual: <input id=\"expSlider\" type=\"range\" min=\"0\" "
+      "max=\"1200\" value=\"300\" step=\"1\"> <span id=\"expValue\">300"
+      "</span></label></div>"
       "<img id=\"live\" alt=\"stream\"><script>(function(){const statusEl="
       "document.getElementById('status');const "
       "imgEl=document.getElementById('live');"
-      "let ws;function connect(){const proto=(location.protocol==='https:')?"
+      "const autoEl=document.getElementById('autoExp');"
+      "const sliderEl=document.getElementById('expSlider');"
+      "const expValueEl=document.getElementById('expValue');"
+      "let ws;function sendText(msg){if(ws&&ws.readyState===1){ws.send(msg);}}"
+      "function applyExpState(autoEnabled,val){autoEl.checked=!!autoEnabled;"
+      "sliderEl.disabled=!!autoEnabled;"
+      "const safeVal=Math.max(0,Math.min(1200,Number(val)||0));"
+      "sliderEl.value=safeVal;expValueEl.textContent=String(safeVal);}"
+      "function parseExpState(text){const m=text.match(/^exp:state:auto=(\\d),"
+      "value=(\\d+)$/);if(!m){return false;}"
+      "applyExpState(m[1]==='1',Number(m[2]));return true;}"
+      "sliderEl.addEventListener('input',function(){expValueEl.textContent="
+      "sliderEl.value;});"
+      "sliderEl.addEventListener('change',function(){if(autoEl.checked){return;"
+      "}"
+      "sendText('exp:set:'+sliderEl.value);});"
+      "autoEl.addEventListener('change',function(){sendText('exp:auto:'+("
+      "autoEl."
+      "checked?'1':'0'));if(!autoEl.checked){sendText('exp:set:'+sliderEl."
+      "value);}}"
+      ");"
+      "function connect(){const proto=(location.protocol==='https:')?"
       "'wss://':'ws://';ws=new "
       "WebSocket(proto+location.host+'/ws');ws.binaryType="
       "'arraybuffer';ws.onopen=function(){statusEl.textContent='Connected';"
-      "ws.send('latest');};ws.onmessage=function(ev){if(typeof "
+      "ws.send('latest');ws.send('exp:get');};ws.onmessage=function(ev){if("
+      "typeof "
       "ev.data==='string')"
-      "{statusEl.textContent=ev.data;return;}const blob=new Blob([ev.data],"
+      "{if(parseExpState(ev.data)){return;}statusEl.textContent=ev.data;return;"
+      "}"
+      "const blob=new Blob([ev.data],"
       "{type:'image/"
       "jpeg'});if(imgEl.dataset.url){URL.revokeObjectURL(imgEl.dataset.url);}"
       "imgEl.src=URL.createObjectURL(blob);imgEl.dataset.url=imgEl.src;"
@@ -138,6 +174,11 @@ esp_err_t PhotoWebServer::handleWs(httpd_req_t* req)
       return sendLatestFrameToClient(req);
     }
 
+    if (strncmp((const char*)payload, "exp:", 4) == 0)
+    {
+      return handleExposureCommand(req, (const char*)payload);
+    }
+
     httpd_ws_frame_t textReply;
     memset(&textReply, 0, sizeof(textReply));
     textReply.type = HTTPD_WS_TYPE_TEXT;
@@ -148,6 +189,79 @@ esp_err_t PhotoWebServer::handleWs(httpd_req_t* req)
   }
 
   return ESP_OK;
+}
+
+esp_err_t PhotoWebServer::sendExposureStateToClient(httpd_req_t* req)
+{
+  if (req == NULL || cameraService_ == NULL)
+  {
+    return ESP_FAIL;
+  }
+
+  bool autoEnabled = true;
+  int value = 0;
+  if (cameraService_->getExposureState(&autoEnabled, &value) != ESP_OK)
+  {
+    return ESP_FAIL;
+  }
+
+  char msg[64];
+  snprintf(msg, sizeof(msg), "exp:state:auto=%d,value=%d", autoEnabled ? 1 : 0,
+           value);
+
+  httpd_ws_frame_t reply;
+  memset(&reply, 0, sizeof(reply));
+  reply.type = HTTPD_WS_TYPE_TEXT;
+  reply.payload = (uint8_t*)msg;
+  reply.len = strlen(msg);
+  return httpd_ws_send_frame(req, &reply);
+}
+
+esp_err_t PhotoWebServer::handleExposureCommand(httpd_req_t* req,
+                                                const char* cmd)
+{
+  if (req == NULL || cmd == NULL || cameraService_ == NULL)
+  {
+    return ESP_FAIL;
+  }
+
+  if (strcmp(cmd, "exp:get") == 0)
+  {
+    return sendExposureStateToClient(req);
+  }
+
+  if (strncmp(cmd, "exp:auto:", 9) == 0)
+  {
+    const char mode = cmd[9];
+    if (mode != '0' && mode != '1')
+    {
+      return ESP_FAIL;
+    }
+
+    if (cameraService_->setAutoExposure(mode == '1') != ESP_OK)
+    {
+      return ESP_FAIL;
+    }
+    return sendExposureStateToClient(req);
+  }
+
+  if (strncmp(cmd, "exp:set:", 8) == 0)
+  {
+    int value = atoi(cmd + 8);
+    if (value < CameraService::kExposureMin ||
+        value > CameraService::kExposureMax)
+    {
+      return ESP_FAIL;
+    }
+
+    if (cameraService_->setManualExposure(value) != ESP_OK)
+    {
+      return ESP_FAIL;
+    }
+    return sendExposureStateToClient(req);
+  }
+
+  return ESP_FAIL;
 }
 
 bool PhotoWebServer::getLatestFrame(uint8_t** outBuf, size_t* outLen,

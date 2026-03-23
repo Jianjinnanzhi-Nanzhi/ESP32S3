@@ -18,10 +18,10 @@ static const IPAddress DEVICE_DNS1(8, 8, 8, 8);
 
 static CameraService g_camera;
 static MemoryPhotoStore g_photoStore(6);
-static PhotoWebServer g_photoWeb(g_photoStore);
+static PhotoWebServer g_photoWeb(g_photoStore, &g_camera);
 static WifiService g_wifi;
 static const uint32_t CAPTURE_INTERVAL_MS = 34;  // ~30 FPS
-static const uint32_t WEB_TASK_STACK = 8192;
+static const uint32_t WEB_TASK_STACK = 8192 * 2;
 static const uint32_t CAPTURE_TASK_STACK = 163840;
 
 static void webTask(void* pvParameters)

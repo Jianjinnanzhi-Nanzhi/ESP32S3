@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#include "CameraService.h"
 #include "MemoryPhotoStore.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -12,7 +13,7 @@
 class PhotoWebServer
 {
  public:
-  explicit PhotoWebServer(MemoryPhotoStore& store);
+  PhotoWebServer(MemoryPhotoStore& store, CameraService* cameraService);
   bool begin(uint16_t port = 80);
   void notifyNewFrame();
 
@@ -25,10 +26,13 @@ class PhotoWebServer
 
   bool getLatestFrame(uint8_t** outBuf, size_t* outLen, uint32_t* outId);
   esp_err_t sendLatestFrameToClient(httpd_req_t* req);
+  esp_err_t sendExposureStateToClient(httpd_req_t* req);
+  esp_err_t handleExposureCommand(httpd_req_t* req, const char* cmd);
   void broadcastLatestToWsClients();
   static void wsBroadcastWork(void* arg);
 
   MemoryPhotoStore& store_;
+  CameraService* cameraService_;
   httpd_handle_t server_;
 
   static PhotoWebServer* instance_;
