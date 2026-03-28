@@ -1,6 +1,8 @@
-#include "CameraService.h"
+#include "camera/CameraService.h"
 
 #include <string.h>
+
+#include "LogSwitch.h"
 
 // 适配当前 ESP32-S3 OV5640 板卡引脚
 #define CAM_PIN_PWDN -1
@@ -78,11 +80,8 @@ esp_err_t CameraService::begin()
   esp_err_t err = esp_camera_init(&config_);
   if (err != ESP_OK)
   {
-    ESP_LOGE(CAMERA_TAG, "Camera init failed");
     return err;
   }
-
-  ESP_LOGI(CAMERA_TAG, "Camera init success");
 
   // 默认使用自动曝光，启动阶段避免首帧过暗/过曝。
   setAutoExposure(true);
@@ -124,14 +123,15 @@ esp_err_t CameraService::captureToJpegBuffer(uint8_t** outBuf, size_t* outLen,
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb)
     {
-      ESP_LOGW(CAMERA_TAG, "Camera capture failed, attempt %d/3", attempt + 1);
+      LOG_ESP_W(LOG_CAMERA, CAMERA_TAG, "Camera capture failed, attempt %d/3",
+                attempt + 1);
       vTaskDelay(pdMS_TO_TICKS(120 * (attempt + 1)));
       continue;
     }
 
     if (fb->format != PIXFORMAT_JPEG)
     {
-      ESP_LOGE(CAMERA_TAG, "Frame is not JPEG");
+      LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "Frame is not JPEG");
       esp_camera_fb_return(fb);
       result = ESP_FAIL;
       break;
@@ -139,7 +139,8 @@ esp_err_t CameraService::captureToJpegBuffer(uint8_t** outBuf, size_t* outLen,
 
     if (!isLikelyValidJpegFrame(fb))
     {
-      ESP_LOGW(CAMERA_TAG, "Invalid JPEG markers, attempt %d/3", attempt + 1);
+      LOG_ESP_W(LOG_CAMERA, CAMERA_TAG, "Invalid JPEG markers, attempt %d/3",
+                attempt + 1);
       esp_camera_fb_return(fb);
       vTaskDelay(pdMS_TO_TICKS(50 * (attempt + 1)));
       continue;
@@ -148,8 +149,9 @@ esp_err_t CameraService::captureToJpegBuffer(uint8_t** outBuf, size_t* outLen,
     uint8_t* copied = (uint8_t*)malloc(fb->len);
     if (copied == NULL)
     {
-      ESP_LOGE(CAMERA_TAG, "Malloc failed for frame copy (%u bytes)",
-               (unsigned int)fb->len);
+      LOG_ESP_E(LOG_CAMERA, CAMERA_TAG,
+                "Malloc failed for frame copy (%u bytes)",
+                (unsigned int)fb->len);
       esp_camera_fb_return(fb);
       result = ESP_ERR_NO_MEM;
       break;
@@ -182,13 +184,14 @@ esp_err_t CameraService::saveJpegBuffer(const uint8_t* buf, size_t len,
   File file = LittleFS.open(path, FILE_WRITE);
   if (!file)
   {
-    ESP_LOGE(CAMERA_TAG, "Create file failed: %s", path);
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "Create file failed: %s", path);
     return ESP_FAIL;
   }
 
   file.write(buf, len);
   file.close();
-  ESP_LOGI(CAMERA_TAG, "Saved: %s (%u bytes)", path, (unsigned int)len);
+  LOG_ESP_I(LOG_CAMERA, CAMERA_TAG, "Saved: %s (%u bytes)", path,
+            (unsigned int)len);
   return ESP_OK;
 }
 
@@ -207,17 +210,19 @@ esp_err_t CameraService::setAutoExposure(bool enabled)
   sensor_t* sensor = esp_camera_sensor_get();
   if (sensor == NULL || sensor->set_exposure_ctrl == NULL)
   {
-    ESP_LOGE(CAMERA_TAG, "Sensor not ready for auto exposure");
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "Sensor not ready for auto exposure");
     return ESP_FAIL;
   }
 
   if (sensor->set_exposure_ctrl(sensor, enabled ? 1 : 0) != 0)
   {
-    ESP_LOGE(CAMERA_TAG, "set_exposure_ctrl(%d) failed", enabled ? 1 : 0);
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "set_exposure_ctrl(%d) failed",
+              enabled ? 1 : 0);
     return ESP_FAIL;
   }
 
-  ESP_LOGI(CAMERA_TAG, "Auto exposure: %s", enabled ? "ON" : "OFF");
+  LOG_ESP_I(LOG_CAMERA, CAMERA_TAG, "Auto exposure: %s",
+            enabled ? "ON" : "OFF");
   return ESP_OK;
 }
 
@@ -227,7 +232,7 @@ esp_err_t CameraService::setManualExposure(int value)
   if (sensor == NULL || sensor->set_exposure_ctrl == NULL ||
       sensor->set_aec_value == NULL)
   {
-    ESP_LOGE(CAMERA_TAG, "Sensor not ready for manual exposure");
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "Sensor not ready for manual exposure");
     return ESP_FAIL;
   }
 
@@ -235,17 +240,17 @@ esp_err_t CameraService::setManualExposure(int value)
 
   if (sensor->set_exposure_ctrl(sensor, 0) != 0)
   {
-    ESP_LOGE(CAMERA_TAG, "Disable auto exposure failed");
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "Disable auto exposure failed");
     return ESP_FAIL;
   }
 
   if (sensor->set_aec_value(sensor, clamped) != 0)
   {
-    ESP_LOGE(CAMERA_TAG, "set_aec_value(%d) failed", clamped);
+    LOG_ESP_E(LOG_CAMERA, CAMERA_TAG, "set_aec_value(%d) failed", clamped);
     return ESP_FAIL;
   }
 
-  ESP_LOGI(CAMERA_TAG, "Manual exposure set: %d", clamped);
+  LOG_ESP_I(LOG_CAMERA, CAMERA_TAG, "Manual exposure set: %d", clamped);
   return ESP_OK;
 }
 

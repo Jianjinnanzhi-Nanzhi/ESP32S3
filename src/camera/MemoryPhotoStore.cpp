@@ -1,9 +1,8 @@
-#include "MemoryPhotoStore.h"
+#include "camera/MemoryPhotoStore.h"
 
 #include <string.h>
 
 #include <algorithm>
-
 
 MemoryPhotoStore::MemoryPhotoStore(size_t capacity)
     : mutex_(NULL), writeIndex_(0), count_(0), nextId_(1)

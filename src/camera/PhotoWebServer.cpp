@@ -1,7 +1,10 @@
-#include "PhotoWebServer.h"
+#include "camera/PhotoWebServer.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+#include "LogSwitch.h"
+
 
 static const char* WEB_TAG = "PhotoWebServer";
 
@@ -32,7 +35,7 @@ bool PhotoWebServer::begin(uint16_t port)
 
   if (httpd_start(&server_, &config) != ESP_OK)
   {
-    ESP_LOGE(WEB_TAG, "Failed to start web server");
+    LOG_ESP_E(LOG_CAMERA, WEB_TAG, "Failed to start web server");
     return false;
   }
 
@@ -51,7 +54,8 @@ bool PhotoWebServer::begin(uint16_t port)
   httpd_register_uri_handler(server_, &indexUri);
   httpd_register_uri_handler(server_, &wsUri);
 
-  ESP_LOGI(WEB_TAG, "Photo web server started on port %u", (unsigned int)port);
+  LOG_ESP_I(LOG_CAMERA, WEB_TAG, "Photo web server started on port %u",
+            (unsigned int)port);
   return true;
 }
 
@@ -370,7 +374,8 @@ void PhotoWebServer::broadcastLatestToWsClients()
     }
   }
 
-  ESP_LOGI(WEB_TAG, "Broadcast frame id=%u len=%u to %u ws clients",
-           (unsigned int)id, (unsigned int)len, (unsigned int)wsSent);
+  LOG_ESP_I(LOG_CAMERA, WEB_TAG,
+            "Broadcast frame id=%u len=%u to %u ws clients", (unsigned int)id,
+            (unsigned int)len, (unsigned int)wsSent);
   free(cloned);
 }

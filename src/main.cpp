@@ -1,108 +1,45 @@
 #include <Arduino.h>
-#include <WiFi.h>
 
-#include "CameraService.h"
-#include "MemoryPhotoStore.h"
-#include "PhotoWebServer.h"
-#include "WifiService.h"
+#include "LogSwitch.h"
+#include "camera/CameraApp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
-const char* ssid = "桂花糕";
-const char* password = "asdfghjkl";
-static const uint16_t WEB_SERVER_PORT = 80;
-static const IPAddress DEVICE_STATIC_IP(192, 168, 1, 188);
-static const IPAddress DEVICE_GATEWAY(192, 168, 1, 1);
-static const IPAddress DEVICE_SUBNET(255, 255, 255, 0);
-static const IPAddress DEVICE_DNS1(8, 8, 8, 8);
-
-static CameraService g_camera;
-static MemoryPhotoStore g_photoStore(6);
-static PhotoWebServer g_photoWeb(g_photoStore, &g_camera);
-static WifiService g_wifi;
-static const uint32_t CAPTURE_INTERVAL_MS = 34;  // ~30 FPS
-static const uint32_t WEB_TASK_STACK = 8192 * 2;
-static const uint32_t CAPTURE_TASK_STACK = 163840;
-
-static void webTask(void* pvParameters)
-{
-  Serial.println("WebTask: starting...");
-  if (!g_wifi.connectStationStatic(ssid, password, DEVICE_STATIC_IP,
-                                   DEVICE_GATEWAY, DEVICE_SUBNET, DEVICE_DNS1))
-  {
-    Serial.println("WebTask: WiFi connect failed");
-    vTaskDelete(NULL);
-    return;
-  }
-
-  if (!g_photoWeb.begin(WEB_SERVER_PORT))
-  {
-    Serial.println("WebTask: web server start failed");
-    vTaskDelete(NULL);
-    return;
-  }
-
-  for (;;)
-  {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  }
-}
-
-static void captureTask(void* pvParameters)
-{
-  for (;;)
-  {
-    uint8_t* buf = NULL;
-    size_t len = 0;
-    uint64_t tsMs = 0;
-
-    if (g_camera.captureToJpegBuffer(&buf, &len, &tsMs) != ESP_OK)
-    {
-      Serial.println("CaptureTask: capture failed");
-      vTaskDelay(pdMS_TO_TICKS(200));
-      continue;
-    }
-
-    if (!g_photoStore.pushOwnedFrame(buf, len, tsMs))
-    {
-      Serial.println("CaptureTask: ring buffer busy, drop frame");
-      free(buf);
-    }
-    else
-    {
-      g_photoWeb.notifyNewFrame();
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(CAPTURE_INTERVAL_MS));
-  }
-}
+#include "motor/MotorBleApp.h"
+#include "ultrasonic/ultrasonic.h"
 
 void setup()
 {
   Serial.begin(115200);
   delay(1000);
 
-  if (!g_photoStore.begin())
+  // 1) 初始化所有模块（不创建任务）
+  bool motorInitOk = initMotorBleApp();
+  bool ultrasonicInitOk = ultrasonic::initUltrasonicModule(ULTRASONIC_TRIG_PIN,
+                                                           ULTRASONIC_ECHO_PIN);
+  bool cameraInitOk = initCameraModule();
+
+  // 2) 统一启动各模块任务
+  bool motorTaskOk = false;
+  bool ultrasonicTaskOk = false;
+  bool cameraTaskOk = false;
+
+  if (motorInitOk)
   {
-    Serial.println("Photo store init failed");
-    return;
+    motorTaskOk = startMotorBleTasks();
+  }
+  if (ultrasonicInitOk)
+  {
+    ultrasonicTaskOk = ultrasonic::startUltrasonicTask();
+  }
+  if (cameraInitOk)
+  {
+    cameraTaskOk = startCameraTasks();
   }
 
-  // 初始化摄像头
-  if (g_camera.begin() != ESP_OK)
+  if (!motorInitOk || !ultrasonicInitOk || !cameraInitOk || !motorTaskOk ||
+      !ultrasonicTaskOk || !cameraTaskOk)
   {
-    Serial.println("Camera init failed");
-    return;
-  }
-
-  BaseType_t webOk = xTaskCreatePinnedToCore(webTask, "WebTask", WEB_TASK_STACK,
-                                             NULL, 2, NULL, 0);
-  BaseType_t capOk = xTaskCreatePinnedToCore(
-      captureTask, "CaptureTask", CAPTURE_TASK_STACK, NULL, 1, NULL, 1);
-
-  if (webOk != pdPASS || capOk != pdPASS)
-  {
-    Serial.println("Task create failed");
+    LOG_PRINTLN(LOG_CAMERA, "[Main] module init/start has failures");
   }
 }
 
