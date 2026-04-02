@@ -2,7 +2,7 @@
 
 #include "LogSwitch.h"
 
-namespace ultrasonic
+namespace esp32s3
 {
 static uint8_t s_trigPin0= 37;
 static uint8_t s_echoPin0 = 38;
@@ -12,7 +12,6 @@ static uint8_t s_echoPin1 =36;
 
 static volatile float s_latestDistanceMm0 = -1.0f;
 static volatile float s_latestDistanceMm1 = -1.0f;
-
 
 static bool s_initialized = false;
 static const uint32_t ULTRASONIC_TASK_STACK = 4096;
@@ -27,7 +26,7 @@ static bool isReservedBySpiMemory(uint8_t pin)
   return pin >= 26 && pin <= 37;
 }
 
-void begin0(uint8_t trigPin, uint8_t echoPin)
+void UltrasonicModule::begin0(uint8_t trigPin, uint8_t echoPin)
 {
   s_trigPin0 = trigPin;
   s_echoPin0 = echoPin;
@@ -42,7 +41,7 @@ void begin0(uint8_t trigPin, uint8_t echoPin)
   s_initialized = true;
 }
 
-void begin1(uint8_t trigPin, uint8_t echoPin)
+void UltrasonicModule::begin1(uint8_t trigPin, uint8_t echoPin)
 {
   s_trigPin1 = trigPin;
   s_echoPin1 = echoPin;
@@ -57,30 +56,7 @@ void begin1(uint8_t trigPin, uint8_t echoPin)
   s_initialized = true;
 }
 
-bool initUltrasonicModule0(uint8_t trigPin, uint8_t echoPin, uint8_t id)
-{
-  if (isReservedBySpiMemory(trigPin) || isReservedBySpiMemory(echoPin))
-  {
-    /*LOG_PRINTF(LOG_ULTRASONIC,
-               "[Ultrasonic] invalid pins: trig=%u echo=%u; "
-               "GPIO26~37 are reserved for SPI flash/PSRAM on ESP32-S3\n",
-               trigPin, echoPin);
-    return false;*/
-  }
-
-  if (trigPin == echoPin)
-  {
-    LOG_PRINTF(LOG_ULTRASONIC,
-               "[Ultrasonic] invalid pins: trig and echo must differ (%u)\n",
-               trigPin);
-    return false;
-  }
-  begin0(trigPin, echoPin);
-  begin1(trigPin, echoPin);
-  return true;
-}
-
-bool initUltrasonicModule0(uint8_t trigPin, uint8_t echoPin)
+bool UltrasonicModule::init0(uint8_t trigPin, uint8_t echoPin)
 {
   /*if (isReservedBySpiMemory(trigPin) || isReservedBySpiMemory(echoPin))
   {
@@ -103,7 +79,7 @@ bool initUltrasonicModule0(uint8_t trigPin, uint8_t echoPin)
   return true;
 }
 
-bool initUltrasonicModule1(uint8_t trigPin, uint8_t echoPin)
+bool UltrasonicModule::init1(uint8_t trigPin, uint8_t echoPin)
 {
  /*
  if (isReservedBySpiMemory(trigPin) || isReservedBySpiMemory(echoPin))
@@ -127,7 +103,7 @@ bool initUltrasonicModule1(uint8_t trigPin, uint8_t echoPin)
   return true;
 }
 
-float measureDistanceMm0()
+float UltrasonicModule::measureDistanceMm0()
 {
   digitalWrite(s_trigPin0, LOW);
   delayMicroseconds(5);
@@ -153,7 +129,7 @@ float measureDistanceMm0()
   return distanceMm;
 }
 
-float measureDistanceMm1()
+float UltrasonicModule::measureDistanceMm1()
 {
   digitalWrite(s_trigPin1, LOW);
   delayMicroseconds(5);
@@ -179,10 +155,10 @@ float measureDistanceMm1()
   return distanceMm;
 }
 
-float getLatestDistanceMm0() { return s_latestDistanceMm0; }
-float getLatestDistanceMm1() { return s_latestDistanceMm1; }
+float UltrasonicModule::getLatestDistanceMm0() { return s_latestDistanceMm0; }
+float UltrasonicModule::getLatestDistanceMm1() { return s_latestDistanceMm1; }
 
-void task(void* pvParameters)
+void UltrasonicModule::task(void* pvParameters)
 {
   LOG_PRINTLN(LOG_ULTRASONIC, "[Ultrasonic] task started");
 
@@ -216,7 +192,7 @@ void task(void* pvParameters)
   }
 }
 
-bool startUltrasonicTask()
+bool UltrasonicModule::startTask()
 {
   if (!s_initialized)
   {
@@ -225,7 +201,7 @@ bool startUltrasonicTask()
   }
 
   BaseType_t ok = xTaskCreatePinnedToCore(
-      task, "UltrasonicTask", ULTRASONIC_TASK_STACK, NULL, 1, NULL, 0);
+      UltrasonicModule::task, "UltrasonicTask", ULTRASONIC_TASK_STACK, NULL, 1, NULL, 0);
   return ok == pdPASS;
 }
-}  // namespace ultrasonic
+}  // namespace esp32s3
