@@ -7,24 +7,16 @@
 #include "camera/CameraService.h"
 #include "camera/MemoryPhotoStore.h"
 #include "camera/PhotoWebServer.h"
-#include "camera/WifiService.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 namespace camera_app
 {
-const char* ssid = "桂花糕";
-const char* password = "asdfghjkl";
 static const uint16_t WEB_SERVER_PORT = 80;
-static const IPAddress DEVICE_STATIC_IP(192, 168, 1, 188);
-static const IPAddress DEVICE_GATEWAY(192, 168, 1, 1);
-static const IPAddress DEVICE_SUBNET(255, 255, 255, 0);
-static const IPAddress DEVICE_DNS1(8, 8, 8, 8);
 
 static CameraService g_camera;
 static MemoryPhotoStore g_photoStore(6);
 static PhotoWebServer g_photoWeb(g_photoStore, &g_camera);
-static WifiService g_wifi;
 
 static const uint32_t CAPTURE_INTERVAL_MS = 34;
 static const uint32_t WEB_TASK_STACK = 8192;
@@ -35,13 +27,16 @@ static bool s_initialized = false;
 static void webTask(void* pvParameters)
 {
   LOG_PRINTLN(LOG_CAMERA, "WebTask: starting...");
-  if (!g_wifi.connectStationStatic(ssid, password, DEVICE_STATIC_IP,
-                                   DEVICE_GATEWAY, DEVICE_SUBNET, DEVICE_DNS1))
+
+  while (WiFi.status() != WL_CONNECTED)
   {
-    LOG_PRINTLN(LOG_CAMERA, "WebTask: WiFi connect failed");
-    vTaskDelete(NULL);
-    return;
+    LOG_PRINTLN(LOG_CAMERA,
+                "WebTask: waiting for WiFi provisioning/connection...");
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
+
+  LOG_PRINT(LOG_CAMERA, "WebTask: WiFi connected, IP=");
+  LOG_PRINTLN(LOG_CAMERA, WiFi.localIP());
 
   if (!g_photoWeb.begin(WEB_SERVER_PORT))
   {

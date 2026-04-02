@@ -1,7 +1,6 @@
-#include "camera/WifiService.h"
+#include "WIFI/WifiService.h"
 
 #include "LogSwitch.h"
-
 
 bool WifiService::connectStation(const char* ssid, const char* password,
                                  uint32_t timeoutMs)

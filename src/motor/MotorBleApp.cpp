@@ -1,35 +1,15 @@
 #include "motor/MotorBleApp.h"
 
 #include <Arduino.h>
-#include <WiFi.h>
 
 #include "LogSwitch.h"
-#include "motor/ble_mpu.h"
-#include "motor/mpu_sensor.h"
 
-namespace motor_app
+namespace motor
 {
-// ========== 硬件引脚定义 ==========
-#define LED_PIN 2
-#define FALL_THRESHOLD 5.0
-#define MPU_TASK_PERIOD_MS 10
-#define BATTERY_TASK_STACK_WORDS 4096
-
-// ========== 振动马达引脚定义 ==========
 #define MOTOR_PIN_1 39
 #define MOTOR_PIN_2 40
 #define MOTOR_PIN_3 41
 #define MOTOR_PIN_4 42
-
-MPU_Sensor mpu;
-BLE_MPU ble;
-
-QueueHandle_t wifiConfigQueue = NULL;
-bool wifiConnected = false;
-
-QueueHandle_t motorCmdQueue = NULL;
-bool motorRunning = false;
-int motorTargetAngle = 0;
 
 typedef enum
 {
@@ -43,29 +23,10 @@ typedef struct
   int angle;
 } MotorCommand;
 
-TaskHandle_t mpuTaskHandle = NULL;
-TaskHandle_t bleTaskHandle = NULL;
-TaskHandle_t batteryTaskHandle = NULL;
-TaskHandle_t wifiTaskHandle = NULL;
-
-QueueHandle_t mpuDataQueue = NULL;
-QueueHandle_t bleMessageQueue = NULL;
+QueueHandle_t motorCmdQueue = NULL;
+bool motorRunning = false;
+int motorTargetAngle = 0;
 bool s_motorInitialized = false;
-bool s_mpuReady = false;
-volatile float s_fallThresholdG2 = FALL_THRESHOLD;
-
-typedef struct
-{
-  char ssid[64];
-  char password[64];
-} WiFiConfig;
-
-typedef struct
-{
-  float ax, ay, az;
-  float gx, gy, gz;
-  bool fallDetected;
-} SensorData;
 
 void calculateMotors(int angle, bool* m1, bool* m2, bool* m3, bool* m4)
 {
@@ -105,211 +66,9 @@ void initMotorPins()
   LOG_PRINTLN(LOG_MOTOR, "[Motor] 马达引脚初始化完成");
 }
 
-void bleDataCallback(String data)
+void motorTask(void* pvParameters)
 {
-  LOG_PRINTLN(LOG_BLE, "[BLE] ========== BLE数据接收回调 ==========");
-  LOG_PRINT(LOG_BLE, "[BLE] 收到原始数据: ");
-  LOG_PRINTLN(LOG_BLE, data);
-
-  if (data.equals("GET_DATA"))
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 命令: 请求传感器数据");
-    xQueueSend(bleMessageQueue, "SEND_DATA", 0);
-  }
-  else if (data.startsWith("SET_THRESHOLD:"))
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 命令: 设置跌倒阈值");
-    String valStr = data.substring(14);
-    float newThreshold = valStr.toFloat();
-    if (newThreshold >= 0.5f && newThreshold <= 20.0f)
-    {
-      s_fallThresholdG2 = newThreshold;
-      LOG_PRINTF(LOG_BLE, "[BLE] 新阈值已生效: %.2f g²\n", s_fallThresholdG2);
-    }
-    else
-    {
-      LOG_PRINTF(LOG_BLE, "[BLE] 阈值无效(%.2f), 允许范围: 0.5~20.0 g²\n",
-                 newThreshold);
-    }
-  }
-  else if (data.startsWith("WIFI:"))
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 命令: WiFi配网");
-    int firstColon = data.indexOf(':', 5);
-    if (firstColon > 0)
-    {
-      String ssid = data.substring(5, firstColon);
-      String password = data.substring(firstColon + 1);
-
-      LOG_PRINT(LOG_BLE, "[BLE] WiFi SSID: ");
-      LOG_PRINTLN(LOG_BLE, ssid);
-      LOG_PRINT(LOG_BLE, "[BLE] WiFi Password: ");
-      LOG_PRINTLN(LOG_BLE, password);
-
-      WiFiConfig wifiConfig;
-      ssid.toCharArray(wifiConfig.ssid, sizeof(wifiConfig.ssid));
-      password.toCharArray(wifiConfig.password, sizeof(wifiConfig.password));
-      xQueueSend(wifiConfigQueue, &wifiConfig, 0);
-    }
-    else
-    {
-      LOG_PRINTLN(LOG_BLE,
-                  "[BLE] 错误: WiFi配网格式不正确,应为 WIFI:账号:密码");
-    }
-  }
-  else if (data.startsWith("change:"))
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 命令: 改变振动");
-    String angleStr = data.substring(7);
-    int angle = angleStr.toInt();
-
-    LOG_PRINTF(LOG_BLE, "[BLE] 目标角度: %d\n", angle);
-
-    MotorCommand cmd;
-    cmd.cmd = MOTOR_CMD_START;
-    cmd.angle = angle;
-    xQueueSend(motorCmdQueue, &cmd, 0);
-  }
-  else if (data.equals("end"))
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 命令: 结束振动");
-
-    MotorCommand cmd;
-    cmd.cmd = MOTOR_CMD_STOP;
-    cmd.angle = 0;
-    xQueueSend(motorCmdQueue, &cmd, 0);
-  }
-  else
-  {
-    LOG_PRINTLN(LOG_BLE, "[BLE] 未知命令");
-  }
-  LOG_PRINTLN(LOG_BLE, "[BLE] ========================================");
-}
-
-void mpuTask(void* pvParameters)
-{
-  SensorData sensorData;
-  bool fallFlag = false;
-  unsigned long fallCooldown = 0;
-
-  LOG_PRINTLN(LOG_MPU, "[MPU Task] 任务已启动, 运行在 Core 1");
-
-  while (true)
-  {
-    mpu.update();
-    mpu.getMotion6(&sensorData.ax, &sensorData.ay, &sensorData.az,
-                   &sensorData.gx, &sensorData.gy, &sensorData.gz);
-
-    bool isFalling = mpu.checkFall(s_fallThresholdG2);
-    unsigned long now = millis();
-
-    if (isFalling && !fallFlag && (now - fallCooldown > 3000))
-    {
-      sensorData.fallDetected = true;
-      fallFlag = true;
-      fallCooldown = now;
-      digitalWrite(LED_PIN, HIGH);
-
-      LOG_PRINTLN(LOG_MPU, "[MPU] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-      LOG_PRINTLN(LOG_MPU, "[MPU] !!!!!!!! 跌倒检测触发 !!!!!!!!!!");
-      LOG_PRINTF(LOG_MPU, "[MPU] !!!! 时间戳: %lu ms\n", now);
-      LOG_PRINTLN(LOG_MPU, "[MPU] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    }
-    else
-    {
-      sensorData.fallDetected = false;
-      if (fallFlag && (now - fallCooldown > 500))
-      {
-        fallFlag = false;
-        digitalWrite(LED_PIN, LOW);
-        LOG_PRINTLN(LOG_MPU, "[MPU] 跌倒状态复位, LED熄灭");
-      }
-    }
-
-    BaseType_t qResult = xQueueSend(mpuDataQueue, &sensorData, 0);
-    if (qResult != pdPASS)
-    {
-      LOG_PRINTLN(LOG_MPU, "[MPU] 警告: 队列已满,数据丢弃");
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(MPU_TASK_PERIOD_MS));
-  }
-}
-
-void bleTask(void* pvParameters)
-{
-  SensorData sensorData;
-  char cmdBuffer[32];
-
-  LOG_PRINTLN(LOG_BLE, "[BLE Task] 任务已启动, 运行在 Core 0");
-
-  while (true)
-  {
-    if (xQueueReceive(mpuDataQueue, &sensorData, pdMS_TO_TICKS(100)) == pdPASS)
-    {
-      if (sensorData.fallDetected)
-      {
-        LOG_PRINTLN(LOG_BLE, "[BLE Task] 收到跌倒事件,发送BLE告警");
-        ble.sendFallAlert();
-      }
-    }
-
-    if (xQueueReceive(bleMessageQueue, cmdBuffer, 0) == pdPASS)
-    {
-      LOG_PRINT(LOG_BLE, "[BLE Task] 收到命令: ");
-      LOG_PRINTLN(LOG_BLE, cmdBuffer);
-
-      if (String(cmdBuffer) == "SEND_DATA")
-      {
-        float ax, ay, az, gx, gy, gz;
-        mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-        LOG_PRINTLN(LOG_BLE, "[BLE Task] 发送传感器数据到BLE");
-        ble.sendSensorData(ax, ay, az, gx, gy, gz);
-      }
-    }
-
-    ble.tick();
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
-}
-
-void batteryTask(void* pvParameters)
-{
-  int lastBattery = -1;
-
-  LOG_PRINTLN(LOG_BATTERY, "[Battery Task] 任务已启动, 运行在 Core 0");
-
-  int battery = random(81, 101);
-
-  while (true)
-  {
-    UBaseType_t stackWordsLeft = uxTaskGetStackHighWaterMark(NULL);
-    if (stackWordsLeft < 512)
-    {
-      LOG_PRINTF(LOG_BATTERY,
-                 "[Battery Task] 警告: 剩余栈仅 %u words, 可能接近溢出\n",
-                 (unsigned)stackWordsLeft);
-    }
-
-    if (battery != lastBattery)
-    {
-      LOG_PRINTF(LOG_BATTERY, "[Battery Task] 电量变化: %d%%\n", battery);
-      ble.sendBattery(battery);
-      lastBattery = battery;
-    }
-    else
-    {
-      int time = random(1, 5);
-      vTaskDelay(pdMS_TO_TICKS(time * 100 * 60));
-    }
-  }
-}
-
-void wifiTask(void* pvParameters)
-{
-  WiFiConfig wifiConfig;
   MotorCommand motorCmd;
-
   bool motorState = false;
   unsigned long motorLastToggle = 0;
   bool currentM1 = false;
@@ -317,58 +76,10 @@ void wifiTask(void* pvParameters)
   bool currentM3 = false;
   bool currentM4 = false;
 
-  LOG_PRINTLN(LOG_WIFI, "[WiFi+Motor Task] 任务已启动, 运行在 Core 0");
+  LOG_PRINTLN(LOG_MOTOR, "[Motor Task] 任务已启动, 运行在 Core 0");
 
   while (true)
   {
-    if (xQueueReceive(wifiConfigQueue, &wifiConfig, 0) == pdPASS)
-    {
-      LOG_PRINTLN(LOG_WIFI, "[WiFi Task] 收到WiFi配置,开始连接...");
-      LOG_PRINTF(LOG_WIFI, "[WiFi Task] SSID: %s\n", wifiConfig.ssid);
-      LOG_PRINTF(LOG_WIFI, "[WiFi Task] Password: %s\n", wifiConfig.password);
-
-      WiFi.begin(wifiConfig.ssid, wifiConfig.password);
-
-      LOG_PRINTLN(LOG_WIFI, "[WiFi Task] 正在连接WiFi...");
-      int attempts = 0;
-      while (WiFi.status() != WL_CONNECTED && attempts < 30)
-      {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        LOG_PRINT(LOG_WIFI, ".");
-        attempts++;
-      }
-      LOG_PRINTLN(LOG_WIFI, "");
-
-      if (WiFi.status() == WL_CONNECTED)
-      {
-        wifiConnected = true;
-        LOG_PRINTLN(LOG_WIFI,
-                    "[WiFi Task] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        LOG_PRINTLN(LOG_WIFI, "[WiFi Task] !!!!! WiFi连接成功 !!!!!!!!!!");
-        LOG_PRINT(LOG_WIFI, "[WiFi Task] IP地址: ");
-        LOG_PRINTLN(LOG_WIFI, WiFi.localIP());
-        LOG_PRINTLN(LOG_WIFI,
-                    "[WiFi Task] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        ble.sendMessage("WIFI_CONNECTED:" + WiFi.localIP().toString());
-      }
-      else
-      {
-        wifiConnected = false;
-        LOG_PRINTLN(LOG_WIFI, "[WiFi Task] WiFi连接失败!");
-        ble.sendMessage("WIFI_FAILED");
-      }
-    }
-
-    if (wifiConnected)
-    {
-      if (WiFi.status() != WL_CONNECTED)
-      {
-        wifiConnected = false;
-        LOG_PRINTLN(LOG_WIFI, "[WiFi Task] WiFi已断开连接");
-        ble.sendMessage("WIFI_DISCONNECTED");
-      }
-    }
-
     if (xQueueReceive(motorCmdQueue, &motorCmd, 0) == pdPASS)
     {
       if (motorCmd.cmd == MOTOR_CMD_START)
@@ -420,49 +131,33 @@ void wifiTask(void* pvParameters)
   }
 }
 
+bool enqueueMotorCmd(MotorCmdType cmd, int angle)
+{
+  if (motorCmdQueue == NULL)
+  {
+    return false;
+  }
+
+  MotorCommand motorCmd;
+  motorCmd.cmd = cmd;
+  motorCmd.angle = angle;
+  return xQueueSend(motorCmdQueue, &motorCmd, 0) == pdPASS;
+}
+
 bool initImpl()
 {
   randomSeed((uint32_t)esp_random());
 
-  LOG_PRINTLN(LOG_BLE, "[Setup] 初始化LED引脚...");
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-
   LOG_PRINTLN(LOG_MOTOR, "[Setup] 初始化振动马达引脚...");
   initMotorPins();
 
-  LOG_PRINTLN(LOG_BLE, "[Setup] 创建FreeRTOS队列...");
-  mpuDataQueue = xQueueCreate(10, sizeof(SensorData));
-  bleMessageQueue = xQueueCreate(5, 32);
-  wifiConfigQueue = xQueueCreate(2, sizeof(WiFiConfig));
+  LOG_PRINTLN(LOG_MOTOR, "[Setup] 创建Motor队列...");
   motorCmdQueue = xQueueCreate(5, sizeof(MotorCommand));
-
-  if (mpuDataQueue == NULL || bleMessageQueue == NULL ||
-      wifiConfigQueue == NULL || motorCmdQueue == NULL)
+  if (motorCmdQueue == NULL)
   {
-    LOG_PRINTLN(LOG_BLE, "[Setup] 错误: 队列创建失败!");
+    LOG_PRINTLN(LOG_MOTOR, "[Setup] 错误: Motor队列创建失败!");
     return false;
   }
-
-  LOG_PRINTLN(LOG_MPU, "[Setup] 初始化MPU6050传感器...");
-  if (!mpu.init())
-  {
-    LOG_PRINTLN(LOG_MPU, "[Setup] 错误: MPU6050初始化失败!");
-    LOG_PRINTLN(LOG_MPU, "[Setup] 请检查I2C连接 (SDA=GPIO21, SCL=GPIO20)");
-    LOG_PRINTLN(LOG_MPU,
-                "[Setup] 进入降级模式: 跳过MPU相关能力,继续启动其他模块");
-    s_mpuReady = false;
-  }
-  else
-  {
-    LOG_PRINTLN(LOG_MPU, "[Setup] MPU6050初始化成功!");
-    s_mpuReady = true;
-  }
-
-  LOG_PRINTLN(LOG_BLE, "[Setup] 初始化低功耗蓝牙...");
-  ble.init("ESP32_MPU6050");
-  ble.setCallback(bleDataCallback);
-  LOG_PRINTLN(LOG_BLE, "[Setup] BLE初始化完成! 设备名: ESP32_MPU6050");
 
   s_motorInitialized = true;
   return true;
@@ -472,44 +167,29 @@ bool startTasksImpl()
 {
   if (!s_motorInitialized)
   {
-    LOG_PRINTLN(LOG_BLE, "[Setup] 错误: motor 模块尚未初始化");
+    LOG_PRINTLN(LOG_MOTOR, "[Setup] 错误: motor 模块尚未初始化");
     return false;
   }
 
-  LOG_PRINTLN(LOG_BLE, "[Setup] 创建FreeRTOS任务...");
-
-  if (s_mpuReady)
+  BaseType_t ok =
+      xTaskCreatePinnedToCore(motorTask, "Motor_Task", 4096, NULL, 1, NULL, 0);
+  if (ok != pdPASS)
   {
-    xTaskCreatePinnedToCore(mpuTask, "MPU_Task", 4096, NULL, 2, &mpuTaskHandle,
-                            1);
-    LOG_PRINTLN(LOG_MPU, "[Setup] MPU任务已创建(Core 1)");
-  }
-  else
-  {
-    LOG_PRINTLN(LOG_MPU, "[Setup] MPU未就绪, 跳过MPU任务创建");
+    LOG_PRINTLN(LOG_MOTOR, "[Setup] 错误: Motor任务创建失败");
+    return false;
   }
 
-  xTaskCreatePinnedToCore(bleTask, "BLE_Task", 4096, NULL, 1, &bleTaskHandle,
-                          0);
-  xTaskCreatePinnedToCore(batteryTask, "Battery_Task", BATTERY_TASK_STACK_WORDS,
-                          NULL, 1, &batteryTaskHandle, 0);
-  xTaskCreatePinnedToCore(wifiTask, "WiFi+Motor_Task", 4096, NULL, 1,
-                          &wifiTaskHandle, 0);
-
-  LOG_PRINTLN(LOG_BLE, "[Setup] 系统初始化完成!");
-  LOG_PRINTLN(LOG_BLE, "==========================================\n");
+  LOG_PRINTLN(LOG_MOTOR, "[Setup] Motor模块启动完成!");
   return true;
 }
-}  // namespace motor_app
+}  // namespace motor
 
-bool initMotorBleApp() { return motor_app::initImpl(); }
-bool startMotorBleTasks() { return motor_app::startTasksImpl(); }
+bool initMotorBleApp() { return motor::initImpl(); }
+bool startMotorBleTasks() { return motor::startTasksImpl(); }
 
-void startMotorBleApp()
+bool motorStartByAngle(int angle)
 {
-  if (!initMotorBleApp())
-  {
-    return;
-  }
-  (void)startMotorBleTasks();
+  return motor::enqueueMotorCmd(motor::MOTOR_CMD_START, angle);
 }
+
+bool motorStop() { return motor::enqueueMotorCmd(motor::MOTOR_CMD_STOP, 0); }
