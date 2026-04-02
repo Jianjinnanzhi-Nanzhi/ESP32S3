@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "LogSwitch.h"
+#include "ultrasonic/ultrasonic.h"
 
 namespace esp32s3
 {
@@ -69,8 +70,10 @@ void initMotorPins()
 void motorTask(void* pvParameters)
 {
   MotorCommand motorCmd;
-  bool motorState = false;
-  unsigned long motorLastToggle = 0;
+  bool motorState0 = false;//导航马达
+  bool motorState1 = false;//超声波马达
+  unsigned long motorLastToggle0 = 0;//导航马达
+  unsigned long motorLastToggle1= 0;//超声波马达
   bool currentM1 = false;
   bool currentM2 = false;
   bool currentM3 = false;
@@ -86,8 +89,8 @@ void motorTask(void* pvParameters)
       {
         motorRunning = true;
         motorTargetAngle = motorCmd.angle;
-        motorState = true;
-        motorLastToggle = millis();
+        motorState0 = true;
+        motorLastToggle0 = millis();
 
         calculateMotors(motorTargetAngle, &currentM1, &currentM2, &currentM3,
                         &currentM4);
@@ -107,17 +110,41 @@ void motorTask(void* pvParameters)
     if (motorRunning)
     {
       unsigned long now = millis();
-      if (now - motorLastToggle >= 1000)
+      if (now - motorLastToggle0 >= 1000)
       {
-        motorState = !motorState;
-        motorLastToggle = now;
+        motorState0 = !motorState0;
+        motorLastToggle0 = now;
 
-        if (motorState)
+        if (motorState0)
         {
           calculateMotors(motorTargetAngle, &currentM1, &currentM2, &currentM3,
                           &currentM4);
           setMotors(currentM1, currentM2, currentM3, currentM4);
           LOG_PRINTLN(LOG_MOTOR, "[Motor] 马达开启");
+        }
+        else
+        {
+          stopAllMotors();
+          LOG_PRINTLN(LOG_MOTOR, "[Motor] 马达关闭");
+        }
+      }
+      if (now - motorLastToggle1 >= 500)
+      {
+        motorState1 = !motorState1;
+        motorLastToggle1 = now;
+
+        if (motorState1)
+        {
+           if(UltrasonicModule::getLatestDistanceMm0() < 100)
+           {
+             LOG_PRINTLN(LOG_ULTRASONIC, "[Ultrasonic] 检测到左前方障碍物, 开始震动");
+             setMotors(1, 1, 0, 0);
+           }
+           if(UltrasonicModule::getLatestDistanceMm1() < 100)
+           {
+            LOG_PRINTLN(LOG_ULTRASONIC, "[Ultrasonic] 检测到右前方障碍物, 开始震动");
+             setMotors(1, 0, 0, 1);
+           }
         }
         else
         {
