@@ -3,28 +3,45 @@
 
 #include <Arduino.h>
 
-#ifndef ULTRASONIC_TRIG_PIN
-#define ULTRASONIC_TRIG_PIN 47
+#ifndef ULTRASONIC_TRIG_PIN1
+#define ULTRASONIC_TRIG_PIN1 47
 #endif
 
-#ifndef ULTRASONIC_ECHO_PIN
-#define ULTRASONIC_ECHO_PIN 48
+#ifndef ULTRASONIC_ECHO_PIN1
+#define ULTRASONIC_ECHO_PIN1 48
+#endif
+
+#ifndef ULTRASONIC_TRIG_PIN0
+#define ULTRASONIC_TRIG_PIN0 37
+#endif
+
+#ifndef ULTRASONIC_ECHO_PIN0
+#define ULTRASONIC_ECHO_PIN0 38
 #endif
 
 namespace esp32s3
 {
-class UltrasonicModule
-{
- public:
-  static bool init(uint8_t trigPin = ULTRASONIC_TRIG_PIN,
-                   uint8_t echoPin = ULTRASONIC_ECHO_PIN);
-  static bool startTask();
-  static void begin(uint8_t trigPin = ULTRASONIC_TRIG_PIN,
-                    uint8_t echoPin = ULTRASONIC_ECHO_PIN);
-  static float measureDistanceMm();
-  static float getLatestDistanceMm();
-  static void task(void* pvParameters);
-};
+  class UltrasonicModule
+  {
+  public:
+    static bool init0(uint8_t trigPin = ULTRASONIC_TRIG_PIN0,
+                            uint8_t echoPin = ULTRASONIC_ECHO_PIN0);
+    static bool init1(uint8_t trigPin = ULTRASONIC_TRIG_PIN1,
+                            uint8_t echoPin = ULTRASONIC_ECHO_PIN1);
+                            
+    static bool startTask();
+    static void begin0(uint8_t trigPin = ULTRASONIC_TRIG_PIN0,
+            uint8_t echoPin = ULTRASONIC_ECHO_PIN0);
+    static float measureDistanceMm0();
+    static float getLatestDistanceMm0();
+
+    static void begin1(uint8_t trigPin = ULTRASONIC_TRIG_PIN1,
+            uint8_t echoPin = ULTRASONIC_ECHO_PIN1);
+    static float measureDistanceMm1();
+    static float getLatestDistanceMm1();
+
+    static void task(void* pvParameters);
+  };
 }  // namespace esp32s3
 
 #endif
